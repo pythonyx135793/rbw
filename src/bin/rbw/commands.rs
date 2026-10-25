@@ -1422,11 +1422,20 @@ pub fn get(
                 .with_context(|| {
                     format!("couldn't find entry for '{desc}'")
                 })?;
-        let attachments = decrypt_attachments(&entry)?;
-        let selected = select_attachment(&attachments, attachment)?;
+        // An exact ID needs no cached keys or filename decryption.
+        let mut ids = entry.attachments.iter().filter(|a| a.id == attachment);
+        let attachment_id = if let Some(selected) = ids.next() {
+            if ids.next().is_some() {
+                anyhow::bail!("ambiguous attachment ID");
+            }
+            selected.id.clone()
+        } else {
+            let attachments = decrypt_attachments(&entry)?;
+            select_attachment(&attachments, attachment)?.id.clone()
+        };
         let output = output.context("attachment output is required")?;
         let bytes = zeroize::Zeroizing::new(
-            crate::actions::download_attachment(&entry.id, &selected.id)?,
+            crate::actions::download_attachment(&entry.id, &attachment_id)?,
         );
         write_attachment(&bytes, output)?;
         return Ok(());
@@ -1478,14 +1487,14 @@ fn select_attachment<'a>(
 
 fn find_attachment_entry(
     db: &rbw::db::Db,
-    needle: Needle,
+    mut needle: Needle,
     username: Option<&str>,
     folder: Option<&str>,
     ignore_case: bool,
 ) -> anyhow::Result<rbw::db::Entry> {
     // Entry lookup needs searchable metadata, not unrelated passwords/hidden
     // fields. The agent enforces the selected attachment's reprompt itself.
-    if let Needle::Uuid(uuid, _) = &needle {
+    if let Needle::Uuid(uuid, name) = &needle {
         if let Some(entry) = db
             .entries
             .iter()
@@ -1493,6 +1502,7 @@ fn find_attachment_entry(
         {
             return Ok(entry.clone());
         }
+        needle = Needle::Name(name.clone());
     }
     let entries = db
         .entries
