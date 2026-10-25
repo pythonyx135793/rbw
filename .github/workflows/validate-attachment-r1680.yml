@@ -1,0 +1,36 @@
+name: Exact-source attachment validation
+on:
+  push:
+    branches: [codex/proof-rbw-attachment-r1680]
+permissions:
+  contents: read
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: proof
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: pythonyx135793/rbw
+          ref: ece29f631556ea4a254b99d01325afd7aa23609e
+          path: source
+          persist-credentials: false
+      - name: Pinned Rust toolchain
+        run: rustup toolchain install 1.99.1 --profile minimal --component rustfmt --component clippy --no-self-update
+      - name: Full tests, build, format and lint
+        env:
+          CARGO_HOME: ${{ runner.temp }}/rbw-cargo
+          CARGO_TARGET_DIR: ${{ runner.temp }}/rbw-target
+        run: python3 proof/proof/validate.py source '${{ runner.temp }}/rbw-evidence'
+      - name: Preserve source and complete results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rbw-attachment-r1680
+          path: ${{ runner.temp }}/rbw-evidence
+          if-no-files-found: error
+          retention-days: 30
