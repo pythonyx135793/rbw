@@ -57,6 +57,21 @@ const proxy=https.createServer({key:await fs.readFile(certKey),cert:await fs.rea
   const forwarded=http.request(new URL(request.url,upstream),{method:request.method,headers:{...request.headers,'x-forwarded-proto':'https'}},reply=>{response.writeHead(reply.statusCode,reply.headers);reply.pipe(response);});
   forwarded.on('error',error=>{response.writeHead(502);response.end(String(error));});request.pipe(forwarded);
 });
+const upgradeSockets=new Set();
+proxy.on('upgrade',(request,socket,head)=>{
+  upgradeSockets.add(socket);socket.on('close',()=>upgradeSockets.delete(socket));
+  const forwarded=http.request(new URL(request.url,upstream),{method:request.method,headers:{...request.headers,'x-forwarded-proto':'https'}});
+  forwarded.on('upgrade',(response,peer,peerHead)=>{
+    upgradeSockets.add(peer);peer.on('close',()=>upgradeSockets.delete(peer));
+    const headers=[];for(let i=0;i<response.rawHeaders.length;i+=2)headers.push(response.rawHeaders[i]+': '+response.rawHeaders[i+1]);
+    socket.write(`HTTP/1.1 ${response.statusCode} ${response.statusMessage}\r\n${headers.join('\r\n')}\r\n\r\n`);
+    if(peerHead.length)socket.write(peerHead);if(head.length)peer.write(head);
+    socket.on('error',()=>peer.destroy());peer.on('error',()=>socket.destroy());
+    socket.pipe(peer);peer.pipe(socket);
+  });
+  forwarded.on('response',response=>{socket.write(`HTTP/1.1 ${response.statusCode} ${response.statusMessage}\r\nConnection: close\r\n\r\n`);response.pipe(socket);});
+  forwarded.on('error',()=>socket.destroy());forwarded.end();
+});
 proxy.listen(18443,'127.0.0.1');await once(proxy,'listening');
 async function postJSON(route,value) {
   return new Promise((resolve,reject)=>{
@@ -126,6 +141,7 @@ try {
 } catch(error) {failure={message:error.message,stack:error.stack};console.error(error.stack);}
 finally {
   if(child){if(child.exitCode===null&&child.signalCode===null)child.kill('SIGTERM');await done.catch(()=>{});}
+  for(const socket of upgradeSockets)socket.destroy();
   proxy.closeAllConnections();await new Promise(r=>proxy.close(r));
   await log.close();
   await fs.writeFile(path.join(evidence,'vaultwarden-e2e-results.json'),JSON.stringify({checks,passed:checks.length,failure,
