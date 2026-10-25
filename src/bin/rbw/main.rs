@@ -316,67 +316,6 @@ impl Config {
     }
 }
 
-#[cfg(test)]
-mod attachment_args_tests {
-    use super::*;
-
-    #[test]
-    fn attachment_arguments_require_output_and_reject_other_formats() {
-        Opt::command().debug_assert();
-        for option in ["--raw", "--full", "--list-fields"] {
-            assert!(Opt::try_parse_from([
-                "rbw",
-                "get",
-                "entry",
-                "--attachment",
-                "file",
-                "--output",
-                "out",
-                option
-            ])
-            .is_err());
-        }
-        assert!(Opt::try_parse_from([
-            "rbw",
-            "get",
-            "entry",
-            "--attachment",
-            "file"
-        ])
-        .is_err());
-        assert!(Opt::try_parse_from([
-            "rbw", "get", "entry", "--output", "out"
-        ])
-        .is_err());
-        assert!(Opt::try_parse_from([
-            "rbw",
-            "get",
-            "entry",
-            "user",
-            "--folder",
-            "folder",
-            "--ignorecase",
-            "--attachment",
-            "file",
-            "--output",
-            "-"
-        ])
-        .is_ok());
-        #[cfg(feature = "clipboard")]
-        assert!(Opt::try_parse_from([
-            "rbw",
-            "get",
-            "entry",
-            "--attachment",
-            "file",
-            "--output",
-            "out",
-            "--clipboard"
-        ])
-        .is_err());
-    }
-}
-
 fn main() {
     let opt = Opt::parse();
 
@@ -595,5 +534,66 @@ fn main() {
     if let Err(e) = res {
         eprintln!("{e:#}");
         std::process::exit(1);
+    }
+}
+
+#[cfg(test)]
+mod attachment_args_tests {
+    use super::*;
+
+    #[test]
+    fn attachment_arguments_require_output_and_reject_other_formats() {
+        Opt::command().debug_assert();
+        for option in ["--raw", "--full", "--list-fields"] {
+            assert!(Opt::try_parse_from([
+                "rbw",
+                "get",
+                "entry",
+                "--attachment",
+                "file",
+                "--output",
+                "out",
+                option
+            ])
+            .is_err());
+        }
+        assert!(Opt::try_parse_from([
+            "rbw",
+            "get",
+            "entry",
+            "--attachment",
+            "file"
+        ])
+        .is_err());
+        assert!(Opt::try_parse_from([
+            "rbw", "get", "entry", "--output", "out"
+        ])
+        .is_err());
+        assert!(Opt::try_parse_from([
+            "rbw",
+            "get",
+            "entry",
+            "user",
+            "--folder",
+            "folder",
+            "--ignorecase",
+            "--attachment",
+            "file",
+            "--output",
+            "-"
+        ])
+        .is_ok());
+        #[cfg(feature = "clipboard")]
+        assert!(Opt::try_parse_from([
+            "rbw",
+            "get",
+            "entry",
+            "--attachment",
+            "file",
+            "--output",
+            "out",
+            "--clipboard"
+        ])
+        .is_err());
     }
 }

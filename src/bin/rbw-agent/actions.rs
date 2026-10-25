@@ -531,7 +531,7 @@ pub async fn sync(
         .await
         .context("failed to sync database from server")?;
     state.lock().await.set_master_password_reprompt(&entries);
-    let _write_guard = DB_WRITE_LOCK.lock().await;
+    let write_guard = DB_WRITE_LOCK.lock().await;
     // Preserve updates made while the server request was in flight.
     let mut db = load_db().await?;
     if let Some(access_token) = access_token {
@@ -542,7 +542,7 @@ pub async fn sync(
     db.protected_org_keys = protected_org_keys;
     db.entries = entries;
     save_db_unlocked(&db).await?;
-    drop(_write_guard);
+    drop(write_guard);
 
     if let Err(e) = subscribe_to_notifications(state.clone()).await {
         eprintln!("failed to subscribe to notifications: {e}");
