@@ -16,7 +16,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: pythonyx135793/rbw
-          ref: e12ee6364b82a5be960a626514add36e55cd0704
+          ref: 6963a224ef915b9c03574039ee2d507c13fb58d6
           path: source
           persist-credentials: false
       - uses: actions/checkout@v4

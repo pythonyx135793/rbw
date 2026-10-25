@@ -10,7 +10,7 @@ import time
 import zipfile
 import urllib.request
 
-SOURCE_SHA = "e12ee6364b82a5be960a626514add36e55cd0704"
+SOURCE_SHA = "6963a224ef915b9c03574039ee2d507c13fb58d6"
 BASE_SHA = "77464d414a9e41165d5b15f049bee1f0c0f2a982"
 source, evidence, baseline = (Path(arg).resolve() for arg in sys.argv[1:])
 proof = Path(__file__).resolve().parent
@@ -72,12 +72,12 @@ results["unchanged_baseline_proof"] = {
 }
 oracle_only = False
 results["previous_source_proof"] = {
-    "source": "aefe9fc2802f3cc11e269da07bb9e38c0cd2d372",
-    "run": 40232535412,
-    "artifact": 12613602322,
-    "archive_sha256": "9ade0def0918909af60eb1beda710669e3e200a10546aa20ba1251d2a73c546d",
-    "verified": "31 tests passed in each feature mode, format/build passed, 24 CLI-agent integration checks passed; complete diagnostic lint same6 original warnings. Strict lint retains original4 lib failures.",
-    "reason": "Prior proof retained; current atomic cache change receives new full checks and the same real-server oracle."
+    "source": "e12ee6364b82a5be960a626514add36e55cd0704",
+    "run": 40234233152,
+    "artifact": 12614621436,
+    "archive_sha256": "0788653b3975da9b21de62ce1812343fe998905b40de2c0f1023834fb6532cb9",
+    "verified": "34 tests passed in each feature mode, format/build passed, 24 CLI-agent and7 real-server oracle checks passed. Strict lint retained old diagnostics; upstream musl exposed the old guard-after-free order.",
+    "reason": "Prior proof retained; corrected buffer destruction and strict lint now receive current full checks and the same real-server oracle."
 }
 binary_root=candidate_target/"debug"
 if not oracle_only:
