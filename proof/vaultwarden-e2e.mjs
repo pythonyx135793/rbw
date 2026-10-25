@@ -59,7 +59,13 @@ try {
   const registration={email,name:'Fictional attachment fixture',masterPasswordHash:crypto.pbkdf2Sync(master,password,1,32,'sha256').toString('base64'),
     key:enc(userKey,expanded),keys:{publicKey:rsa.publicKey.export({type:'spki',format:'der'}).toString('base64'),
       encryptedPrivateKey:enc(rsa.privateKey.export({type:'pkcs8',format:'der'}),userKey)},kdf:0,kdfIterations:iterations};
-  const response=await fetch(base+'/api/accounts/register',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(registration)});
+  // Vaultwarden 1.37.4's normal no-mail signup returns a token, then finishes
+  // registration through identity. This is a disposable local fixture account.
+  const verify=await fetch(base+'/identity/accounts/register/send-verification-email',{method:'POST',headers:{'Content-Type':'application/json','Accept':'application/json'},body:JSON.stringify({email,name:registration.name})});
+  assert.equal(verify.status,200,await verify.clone().text());
+  registration.emailVerificationToken=await verify.json();
+  assert.equal(typeof registration.emailVerificationToken,'string');
+  const response=await fetch(base+'/identity/accounts/register/finish',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(registration)});
   assert.equal(response.status,200,await response.text());
   await bwRun('config','server',base);
   env.BW_SESSION=(await bwRun('login',email,password,'--raw')).toString().trim();

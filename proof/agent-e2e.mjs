@@ -41,34 +41,35 @@ const server = http.createServer(async (req,res) => {
   try {
     const url = new URL(req.url, base);
     requests.push({path:url.pathname,bearer_present:Boolean(req.headers.authorization)});
+    const pathname=url.pathname.split('/').map(decodeURIComponent).join('/');
     const json = (status, value) => {res.writeHead(status,{'Content-Type':'application/json'});res.end(JSON.stringify(value));};
-    if(url.pathname==='/identity/connect/token') {
+    if(pathname==='/identity/connect/token') {
       let body='';for await (const chunk of req) body+=chunk;
       assert.equal(new URLSearchParams(body).get('grant_type'),'refresh_token');
       if(refreshGate) {refreshGate.started(); await refreshGate.wait;}
       token='refreshed-synthetic-token';
       return json(200,{access_token:token});
     }
-    if(url.pathname.startsWith('/api/')) {
+    if(pathname.startsWith('/api/')) {
       if(req.headers.authorization!==`Bearer ${token}`) return json(401,{});
-      if(url.pathname===`/api/ciphers/${entryId}`) {
+      if(pathname===`/api/ciphers/${entryId}`) {
         if(mode==='wrong-entry') return json(200,{...current,id:crypto.randomUUID()});
         if(mode==='forbidden-entry') return json(403,{});
         return json(200,current);
       }
-      if(url.pathname.startsWith(`/api/ciphers/${entryId}/attachment/`)) {
+      if(pathname.startsWith(`/api/ciphers/${entryId}/attachment/`)) {
         if(mode==='legacy') return json(404,{});
         if(mode==='forbidden-url') return json(403,{});
-        const id=decodeURIComponent(url.pathname.split('/').at(-1));
+        const id=pathname.split('/').at(-1);
         const a=current.attachments.find(a=>a.id===id);
         return a?json(200,{...a,url:`${base}/blob/${id}`}):json(404,{});
       }
       return json(404,{});
     }
-    if(url.pathname.startsWith('/blob/')) {
+    if(pathname.startsWith('/blob/')) {
       assert.equal(req.headers.authorization,undefined,'vault token leaked to blob');
       if(blobGate) {blobGate.started();await blobGate.wait;}
-      const data=blobs.get(url.pathname.split('/').at(-1));
+      const data=blobs.get(pathname.split('/').at(-1));
       if(!data) return json(404,{});
       const out=Buffer.from(data);
       if(mode==='corrupt') out[17]^=1;

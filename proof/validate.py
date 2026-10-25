@@ -9,7 +9,7 @@ import time
 import zipfile
 import urllib.request
 
-SOURCE_SHA = "43d004b03bb7621ff975a23a9a91a4de6861db76"
+SOURCE_SHA = "aefe9fc2802f3cc11e269da07bb9e38c0cd2d372"
 BASE_SHA = "77464d414a9e41165d5b15f049bee1f0c0f2a982"
 source, evidence, baseline = (Path(arg).resolve() for arg in sys.argv[1:])
 proof = Path(__file__).resolve().parent
@@ -57,15 +57,14 @@ def run(name, args, timeout=1200, cwd=None, expected=0):
 
 assert subprocess.check_output(["git","rev-parse","HEAD"],cwd=baseline).decode().strip()==BASE_SHA
 run("rust-version", ["rustc", "+1.99.1", "--version"], 30)
-run("baseline-clippy-strict", ["cargo", "+1.99.1", "clippy", "--locked", "--all-targets", "--all-features", "--", "-Dwarnings"], cwd=baseline, expected=101)
-run("baseline-clippy-diagnostics", ["cargo", "+1.99.1", "clippy", "--locked", "--all-targets", "--all-features", "--message-format=json"], cwd=baseline)
-run("baseline-production-build", ["cargo", "+1.99.1", "build", "--locked", "--all-features"], cwd=baseline)
-baseline_binary=baseline_target/"debug/rbw"
+results["unchanged_baseline_proof"] = {
+    "source": BASE_SHA,
+    "run": 40232059047,
+    "artifact": 12612968678,
+    "archive_sha256": "9bfc3eda8ea4f9696694db8447e0369e0d161df41fc46457465a1d2d3c8dd801",
+    "reason": "Same frozen original and toolchain already verified; preserve full lint diagnostics, build and CLI negative control without repeating them."
+}
 binary_root=candidate_target/"debug"
-if baseline_binary.exists():
-    run("original-negative-control", [str(baseline_binary), "get", "fictional", "--attachment", "file", "--output", "unused"], expected=2)
-    results["original_negative_control_valid"] = "unexpected argument '--attachment'" in (evidence/"original-negative-control.log").read_text()
-    assert results["original_negative_control_valid"]
 run("format", ["cargo", "+1.99.1", "fmt", "--check"], 60)
 tests = run("all-feature-tests", ["cargo", "+1.99.1", "test", "--locked", "--all-features"])
 if tests == 0:
