@@ -54,18 +54,30 @@ await command('openssl',['req','-new','-newkey','rsa:2048','-nodes','-subj','/CN
 await fs.writeFile(extensions,'basicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature,keyEncipherment\nextendedKeyUsage=serverAuth\nsubjectAltName=DNS:localhost,IP:127.0.0.1\n');
 await command('openssl',['x509','-req','-in',csrFile,'-CA',caFile,'-CAkey',caKey,'-CAcreateserial','-days','1','-extfile',extensions,'-out',certFile]);
 const ca=await fs.readFile(caFile);
+// Own both sides' agents so upgraded/keep-alive connections cannot outlive
+// this disposable fixture after the server has stopped accepting clients.
+const upstreamAgent=new http.Agent({keepAlive:false});
+const registrationAgent=new https.Agent({keepAlive:false,ca});
+const forwardedRequests=new Set();
+function forward(request) {
+  const forwarded=http.request(new URL(request.url,upstream),{method:request.method,agent:upstreamAgent,headers:{...request.headers,'x-forwarded-proto':'https'}});
+  forwardedRequests.add(forwarded);forwarded.on('close',()=>forwardedRequests.delete(forwarded));
+  return forwarded;
+}
 env.NODE_EXTRA_CA_CERTS=caFile;
 env.SSL_CERT_FILE=caFile;
 const proxy=https.createServer({key:await fs.readFile(certKey),cert:await fs.readFile(certFile)},(request,response)=>{
-  const forwarded=http.request(new URL(request.url,upstream),{method:request.method,headers:{...request.headers,'x-forwarded-proto':'https'}},reply=>{response.writeHead(reply.statusCode,reply.headers);reply.pipe(response);});
+  const forwarded=forward(request);
+  forwarded.on('response',reply=>{response.writeHead(reply.statusCode,reply.headers);reply.pipe(response);});
   forwarded.on('error',error=>{response.writeHead(502);response.end(String(error));});request.pipe(forwarded);
 });
 const upgradeSockets=new Set();
 const proxySockets=new Set();
 proxy.on('connection',socket=>{proxySockets.add(socket);socket.on('close',()=>proxySockets.delete(socket));});
+proxy.on('secureConnection',socket=>{proxySockets.add(socket);socket.on('close',()=>proxySockets.delete(socket));});
 proxy.on('upgrade',(request,socket,head)=>{
   upgradeSockets.add(socket);socket.on('close',()=>upgradeSockets.delete(socket));
-  const forwarded=http.request(new URL(request.url,upstream),{method:request.method,headers:{...request.headers,'x-forwarded-proto':'https'}});
+  const forwarded=forward(request);
   forwarded.on('upgrade',(response,peer,peerHead)=>{
     upgradeSockets.add(peer);peer.on('close',()=>upgradeSockets.delete(peer));
     const headers=[];for(let i=0;i<response.rawHeaders.length;i+=2)headers.push(response.rawHeaders[i]+': '+response.rawHeaders[i+1]);
@@ -81,7 +93,7 @@ proxy.on('upgrade',(request,socket,head)=>{
 proxy.listen(18443,'127.0.0.1');await once(proxy,'listening');
 async function postJSON(route,value) {
   return new Promise((resolve,reject)=>{
-    const request=https.request(base+route,{method:'POST',ca,headers:{'Content-Type':'application/json','Accept':'application/json'}},response=>{
+    const request=https.request(base+route,{method:'POST',agent:registrationAgent,headers:{'Content-Type':'application/json','Accept':'application/json'}},response=>{
       const chunks=[];response.on('data',b=>chunks.push(b));response.on('end',()=>{
         try {const body=Buffer.concat(chunks).toString();assert.equal(response.statusCode,200,body);resolve(JSON.parse(body));}catch(error){reject(error);}
       });
@@ -155,15 +167,25 @@ finally {
     if(!graceful){child.kill('SIGKILL');await terminated;}
   }
   const closed=new Promise(resolve=>proxy.close(()=>resolve(true)));
+  for(const request of forwardedRequests)request.destroy();
+  upstreamAgent.destroy();registrationAgent.destroy();
   for(const socket of upgradeSockets)socket.destroy();
   for(const socket of proxySockets)socket.destroy();
   proxy.closeAllConnections();
   let closeTimer;const proxyClosed=await Promise.race([closed,new Promise(resolve=>{closeTimer=setTimeout(()=>resolve(false),3000);})]);clearTimeout(closeTimer);
   if(!proxyClosed&&!failure)failure={message:'owned HTTPS fixture did not close',stack:null};
   await log.close();
+  // Socket close events settle asynchronously even after server.close's callback.
+  const resourcesDeadline=Date.now()+3000;
+  while((forwardedRequests.size||proxySockets.size||upgradeSockets.size)&&Date.now()<resourcesDeadline)
+    await new Promise(resolve=>setTimeout(resolve,10));
+  const ownedConnectionsClosed=forwardedRequests.size===0&&proxySockets.size===0&&upgradeSockets.size===0;
+  if(!ownedConnectionsClosed&&!failure)failure={message:'owned fixture requests or sockets remained open',stack:null};
   await fs.writeFile(path.join(evidence,'vaultwarden-e2e-results.json'),JSON.stringify({checks,passed:checks.length,failure,
     synthetic_only:true,real_server:true,official_cli:'2025.12.1',server_release:'1.37.4',
-    entry_id:entryId,attachment_id:attachmentId,agent_exit:child?.exitCode,agent_signal:child?.signalCode,cleanup:proxyClosed&&(!child||child.exitCode!==null||child.signalCode!==null),
+    entry_id:entryId,attachment_id:attachmentId,agent_exit:child?.exitCode,agent_signal:child?.signalCode,cleanup:ownedConnectionsClosed&&proxyClosed&&(!child||child.exitCode!==null||child.signalCode!==null),
+    owned_requests_remaining:forwardedRequests.size,owned_sockets_remaining:proxySockets.size+upgradeSockets.size,
+    active_resources:process.getActiveResourcesInfo(),
     tls:'Ephemeral local CA, hostname-valid server certificate, Node extra CA and Rust native roots; certificate verification enabled'},null,2));
 }
 if(failure)process.exitCode=1;

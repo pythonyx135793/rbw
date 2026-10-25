@@ -70,14 +70,14 @@ results["unchanged_baseline_proof"] = {
     "archive_sha256": "9bfc3eda8ea4f9696694db8447e0369e0d161df41fc46457465a1d2d3c8dd801",
     "reason": "Same frozen original and toolchain already verified; preserve full lint diagnostics, build and CLI negative control without repeating them."
 }
-oracle_only = False
+oracle_only = True
 results["previous_source_proof"] = {
-    "source": "e12ee6364b82a5be960a626514add36e55cd0704",
-    "run": 40234233152,
-    "artifact": 12614621436,
-    "archive_sha256": "0788653b3975da9b21de62ce1812343fe998905b40de2c0f1023834fb6532cb9",
-    "verified": "34 tests passed in each feature mode, format/build passed, 24 CLI-agent and7 real-server oracle checks passed. Strict lint retained old diagnostics; upstream musl exposed the old guard-after-free order.",
-    "reason": "Prior proof retained; corrected buffer destruction and strict lint now receive current full checks and the same real-server oracle."
+    "source": SOURCE_SHA,
+    "run": 40235445646,
+    "artifact": 12615150972,
+    "archive_sha256": "a809a50d9d7c6db26d570eef093bfe85baf78b544725fa22df2e24aa0aad52c2",
+    "verified": "35 tests passed in each feature mode, format/build/strict Clippy passed, 24 CLI-agent and7 real-server checks passed; oracle process stayed alive after its cleanup report and hit300s.",
+    "reason": "Application is unchanged. This run checks fixture connection ownership and actual process termination; successful current source tests are not repeated."
 }
 binary_root=candidate_target/"debug"
 if not oracle_only:
