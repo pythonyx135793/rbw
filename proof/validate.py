@@ -64,16 +64,29 @@ results["unchanged_baseline_proof"] = {
     "archive_sha256": "9bfc3eda8ea4f9696694db8447e0369e0d161df41fc46457465a1d2d3c8dd801",
     "reason": "Same frozen original and toolchain already verified; preserve full lint diagnostics, build and CLI negative control without repeating them."
 }
+oracle_only = True
+results["reused_current_source_proof"] = {
+    "source": SOURCE_SHA,
+    "run": 40232535412,
+    "artifact": 12613602322,
+    "archive_sha256": "9ade0def0918909af60eb1beda710669e3e200a10546aa20ba1251d2a73c546d",
+    "verified": "31 tests passed in each feature mode, format/build passed, 24 CLI-agent integration checks passed; complete diagnostic lint same6 original warnings. Strict lint retains original4 lib failures.",
+    "reason": "Application source unchanged; only complete the previously blocked HTTPS real-server oracle."
+}
 binary_root=candidate_target/"debug"
-run("format", ["cargo", "+1.99.1", "fmt", "--check"], 60)
-tests = run("all-feature-tests", ["cargo", "+1.99.1", "test", "--locked", "--all-features"])
+if not oracle_only:
+    run("format", ["cargo", "+1.99.1", "fmt", "--check"], 60)
+tests = 0 if oracle_only else run("all-feature-tests", ["cargo", "+1.99.1", "test", "--locked", "--all-features"])
 if tests == 0:
-    run("no-default-feature-tests", ["cargo", "+1.99.1", "test", "--locked", "--no-default-features"])
+    if not oracle_only:
+        run("no-default-feature-tests", ["cargo", "+1.99.1", "test", "--locked", "--no-default-features"])
     built=run("production-build", ["cargo", "+1.99.1", "build", "--locked", "--all-features"])
-    run("clippy", ["cargo", "+1.99.1", "clippy", "--locked", "--all-targets", "--all-features", "--", "-Dwarnings"])
-    run("candidate-clippy-diagnostics", ["cargo", "+1.99.1", "clippy", "--locked", "--all-targets", "--all-features", "--message-format=json"])
+    if not oracle_only:
+        run("clippy", ["cargo", "+1.99.1", "clippy", "--locked", "--all-targets", "--all-features", "--", "-Dwarnings"])
+        run("candidate-clippy-diagnostics", ["cargo", "+1.99.1", "clippy", "--locked", "--all-targets", "--all-features", "--message-format=json"])
     if built==0:
-        run("actual-cli-agent-e2e", ["node",str(proof/"agent-e2e.mjs"),str(binary_root/"rbw"),str(binary_root/"rbw-agent"),str(evidence)], timeout=240)
+        if not oracle_only:
+            run("actual-cli-agent-e2e", ["node",str(proof/"agent-e2e.mjs"),str(binary_root/"rbw"),str(binary_root/"rbw-agent"),str(evidence)], timeout=240)
         oracle=evidence.parent/"bw-oracle"
         install=run("install-official-oracle", ["npm","install","--prefix",str(oracle),"--ignore-scripts","--no-audit","--no-fund","@bitwarden/cli@2025.12.1"], timeout=300)
         pulled=run("pull-vaultwarden", ["docker","pull","vaultwarden/server:1.37.4"], timeout=300)
@@ -81,7 +94,7 @@ if tests == 0:
             data=evidence.parent/"vaultwarden-data";data.mkdir(exist_ok=True)
             name="rbw-fixture-"+os.environ["GITHUB_RUN_ID"]
             try:
-                started=run("start-vaultwarden",["docker","run","--detach","--name",name,"--user",f"{os.getuid()}:{os.getgid()}","--publish","127.0.0.1:18080:8080","--env","ROCKET_PORT=8080","--env","DOMAIN=http://127.0.0.1:18080","--env","WEB_VAULT_ENABLED=false","--env","SIGNUPS_ALLOWED=true","--mount",f"type=bind,source={data},target=/data","vaultwarden/server:1.37.4"],timeout=60)
+                started=run("start-vaultwarden",["docker","run","--detach","--name",name,"--user",f"{os.getuid()}:{os.getgid()}","--publish","127.0.0.1:18080:8080","--env","ROCKET_PORT=8080","--env","DOMAIN=https://127.0.0.1:18443","--env","WEB_VAULT_ENABLED=false","--env","SIGNUPS_ALLOWED=true","--mount",f"type=bind,source={data},target=/data","vaultwarden/server:1.37.4"],timeout=60)
                 run("vaultwarden-image-identity",["docker","image","inspect","vaultwarden/server:1.37.4"],timeout=30)
                 if started==0:
                     deadline=time.monotonic()+40

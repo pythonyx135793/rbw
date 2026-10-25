@@ -2,11 +2,14 @@
 import assert from 'node:assert/strict';
 import * as fs from 'node:fs/promises';
 import * as crypto from 'node:crypto';
+import http from 'node:http';
+import https from 'node:https';
 import path from 'node:path';
 import {spawn} from 'node:child_process';
 import {once} from 'node:events';
 
-const [rbwArg, agentArg, bwArg, base, evidenceArg] = process.argv.slice(2);
+const [rbwArg, agentArg, bwArg, upstream, evidenceArg] = process.argv.slice(2);
+const base='https://127.0.0.1:18443';
 const rbw=path.resolve(rbwArg), agent=path.resolve(agentArg), bw=path.resolve(bwArg), evidence=path.resolve(evidenceArg);
 await fs.mkdir(evidence,{recursive:true});
 const root=await fs.mkdtemp(path.join(path.dirname(evidence),'vaultwarden-fictional-'));
@@ -40,6 +43,30 @@ async function command(exe,args,input) {
 const bwRun=(...args)=>command(process.execPath,[bw,...args]);
 const rbwRun=(...args)=>command(rbw,args);
 const pass=name=>{checks.push(name);console.log('PASS '+name);};
+const caFile=path.join(root,'fixture-ca.pem'), caKey=path.join(root,'fixture-ca.key');
+const certFile=path.join(root,'fixture-server.pem'), certKey=path.join(root,'fixture-server.key');
+const csrFile=path.join(root,'fixture-server.csr'), extensions=path.join(root,'fixture-server.ext');
+await command('openssl',['req','-x509','-newkey','rsa:2048','-nodes','-days','1','-subj','/CN=Disposable rbw fixture CA','-addext','basicConstraints=critical,CA:TRUE,pathlen:0','-addext','keyUsage=critical,keyCertSign,cRLSign','-keyout',caKey,'-out',caFile]);
+await command('openssl',['req','-new','-newkey','rsa:2048','-nodes','-subj','/CN=localhost','-keyout',certKey,'-out',csrFile]);
+await fs.writeFile(extensions,'basicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature,keyEncipherment\nextendedKeyUsage=serverAuth\nsubjectAltName=DNS:localhost,IP:127.0.0.1\n');
+await command('openssl',['x509','-req','-in',csrFile,'-CA',caFile,'-CAkey',caKey,'-CAcreateserial','-days','1','-extfile',extensions,'-out',certFile]);
+const ca=await fs.readFile(caFile);
+env.NODE_EXTRA_CA_CERTS=caFile;
+env.SSL_CERT_FILE=caFile;
+const proxy=https.createServer({key:await fs.readFile(certKey),cert:await fs.readFile(certFile)},(request,response)=>{
+  const forwarded=http.request(new URL(request.url,upstream),{method:request.method,headers:{...request.headers,'x-forwarded-proto':'https'}},reply=>{response.writeHead(reply.statusCode,reply.headers);reply.pipe(response);});
+  forwarded.on('error',error=>{response.writeHead(502);response.end(String(error));});request.pipe(forwarded);
+});
+proxy.listen(18443,'127.0.0.1');await once(proxy,'listening');
+async function postJSON(route,value) {
+  return new Promise((resolve,reject)=>{
+    const request=https.request(base+route,{method:'POST',ca,headers:{'Content-Type':'application/json','Accept':'application/json'}},response=>{
+      const chunks=[];response.on('data',b=>chunks.push(b));response.on('end',()=>{
+        try {const body=Buffer.concat(chunks).toString();assert.equal(response.statusCode,200,body);resolve(JSON.parse(body));}catch(error){reject(error);}
+      });
+    });request.on('error',reject);request.end(JSON.stringify(value));
+  });
+}
 const pinentry=path.join(root,'pinentry');
 await fs.writeFile(pinentry,`#!/usr/bin/env python3
 import sys
@@ -61,12 +88,9 @@ try {
       encryptedPrivateKey:enc(rsa.privateKey.export({type:'pkcs8',format:'der'}),userKey)},kdf:0,kdfIterations:iterations};
   // Vaultwarden 1.37.4's normal no-mail signup returns a token, then finishes
   // registration through identity. This is a disposable local fixture account.
-  const verify=await fetch(base+'/identity/accounts/register/send-verification-email',{method:'POST',headers:{'Content-Type':'application/json','Accept':'application/json'},body:JSON.stringify({email,name:registration.name})});
-  assert.equal(verify.status,200,await verify.clone().text());
-  registration.emailVerificationToken=await verify.json();
+  registration.emailVerificationToken=await postJSON('/identity/accounts/register/send-verification-email',{email,name:registration.name});
   assert.equal(typeof registration.emailVerificationToken,'string');
-  const response=await fetch(base+'/identity/accounts/register/finish',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(registration)});
-  assert.equal(response.status,200,await response.text());
+  await postJSON('/identity/accounts/register/finish',registration);
   await bwRun('config','server',base);
   env.BW_SESSION=(await bwRun('login',email,password,'--raw')).toString().trim();
   assert.ok(env.BW_SESSION.length>20);pass('official CLI logs into disposable real Vaultwarden');
@@ -102,9 +126,11 @@ try {
 } catch(error) {failure={message:error.message,stack:error.stack};console.error(error.stack);}
 finally {
   if(child){if(child.exitCode===null&&child.signalCode===null)child.kill('SIGTERM');await done.catch(()=>{});}
+  proxy.closeAllConnections();await new Promise(r=>proxy.close(r));
   await log.close();
   await fs.writeFile(path.join(evidence,'vaultwarden-e2e-results.json'),JSON.stringify({checks,passed:checks.length,failure,
     synthetic_only:true,real_server:true,official_cli:'2025.12.1',server_release:'1.37.4',
-    entry_id:entryId,attachment_id:attachmentId,agent_exit:child?.exitCode,agent_signal:child?.signalCode,cleanup:true},null,2));
+    entry_id:entryId,attachment_id:attachmentId,agent_exit:child?.exitCode,agent_signal:child?.signalCode,cleanup:true,
+    tls:'Ephemeral local CA, hostname-valid server certificate, Node extra CA and Rust native roots; certificate verification enabled'},null,2));
 }
 if(failure)process.exitCode=1;
