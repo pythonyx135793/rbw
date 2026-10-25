@@ -1,6 +1,7 @@
 // Real disposable Vaultwarden + official Bitwarden CLI oracle. No real account.
 import assert from 'node:assert/strict';
 import * as fs from 'node:fs/promises';
+import {writeFileSync} from 'node:fs';
 import * as crypto from 'node:crypto';
 import http from 'node:http';
 import https from 'node:https';
@@ -33,16 +34,18 @@ const env={...process.env,BITWARDENCLI_APPDATA_DIR:path.join(root,'bw'),
   PATH:path.dirname(rbw)+path.delimiter+process.env.PATH};
 for(const dir of ['bw','home','config','cache','data','run'])await fs.mkdir(path.join(root,dir),{recursive:true,mode:0o700});
 async function command(exe,args,input) {
+  console.log('BEGIN '+path.basename(exe)+' '+args[0]);
   const child=spawn(exe,args,{env,stdio:['pipe','pipe','pipe']});const out=[],err=[];
   child.stdout.on('data',b=>out.push(b));child.stderr.on('data',b=>err.push(b));child.stdin.end(input);
   const timer=setTimeout(()=>child.kill('SIGKILL'),45000);
   const [code]=await once(child,'close');clearTimeout(timer);
+  console.log('END '+path.basename(exe)+' '+args[0]+' exit='+code+' signal='+child.signalCode);
   const stderr=Buffer.concat(err).toString();assert.equal(code,0,`${path.basename(exe)} ${args[0]}: ${stderr}`);
   return Buffer.concat(out);
 }
 const bwRun=(...args)=>command(process.execPath,[bw,...args]);
 const rbwRun=(...args)=>command(rbw,args);
-const pass=name=>{checks.push(name);console.log('PASS '+name);};
+const pass=name=>{checks.push(name);console.log('PASS '+name);writeFileSync(path.join(evidence,'vaultwarden-progress.json'),JSON.stringify({checks,at:new Date().toISOString(),cleanup_complete:false},null,2));};
 const caFile=path.join(root,'fixture-ca.pem'), caKey=path.join(root,'fixture-ca.key');
 const certFile=path.join(root,'fixture-server.pem'), certKey=path.join(root,'fixture-server.key');
 const csrFile=path.join(root,'fixture-server.csr'), extensions=path.join(root,'fixture-server.ext');
@@ -58,6 +61,8 @@ const proxy=https.createServer({key:await fs.readFile(certKey),cert:await fs.rea
   forwarded.on('error',error=>{response.writeHead(502);response.end(String(error));});request.pipe(forwarded);
 });
 const upgradeSockets=new Set();
+const proxySockets=new Set();
+proxy.on('connection',socket=>{proxySockets.add(socket);socket.on('close',()=>proxySockets.delete(socket));});
 proxy.on('upgrade',(request,socket,head)=>{
   upgradeSockets.add(socket);socket.on('close',()=>upgradeSockets.delete(socket));
   const forwarded=http.request(new URL(request.url,upstream),{method:request.method,headers:{...request.headers,'x-forwarded-proto':'https'}});
@@ -67,6 +72,7 @@ proxy.on('upgrade',(request,socket,head)=>{
     socket.write(`HTTP/1.1 ${response.statusCode} ${response.statusMessage}\r\n${headers.join('\r\n')}\r\n\r\n`);
     if(peerHead.length)socket.write(peerHead);if(head.length)peer.write(head);
     socket.on('error',()=>peer.destroy());peer.on('error',()=>socket.destroy());
+    socket.on('close',()=>peer.destroy());peer.on('close',()=>socket.destroy());
     socket.pipe(peer);peer.pipe(socket);
   });
   forwarded.on('response',response=>{socket.write(`HTTP/1.1 ${response.statusCode} ${response.statusMessage}\r\nConnection: close\r\n\r\n`);response.pipe(socket);});
@@ -140,13 +146,24 @@ try {
   pass('actual server protected attachment requires fresh password reprompt');
 } catch(error) {failure={message:error.message,stack:error.stack};console.error(error.stack);}
 finally {
-  if(child){if(child.exitCode===null&&child.signalCode===null)child.kill('SIGTERM');await done.catch(()=>{});}
+  await fs.writeFile(path.join(evidence,'vaultwarden-before-cleanup.json'),JSON.stringify({checks,passed:checks.length,failure,cleanup_complete:false},null,2));
+  if(child){
+    if(child.exitCode===null&&child.signalCode===null)child.kill('SIGTERM');
+    let cleanupTimer;const terminated=done.then(()=>true,()=>true);
+    const graceful=await Promise.race([terminated,new Promise(resolve=>{cleanupTimer=setTimeout(()=>resolve(false),3000);})]);
+    clearTimeout(cleanupTimer);
+    if(!graceful){child.kill('SIGKILL');await terminated;}
+  }
+  const closed=new Promise(resolve=>proxy.close(()=>resolve(true)));
   for(const socket of upgradeSockets)socket.destroy();
-  proxy.closeAllConnections();await new Promise(r=>proxy.close(r));
+  for(const socket of proxySockets)socket.destroy();
+  proxy.closeAllConnections();
+  let closeTimer;const proxyClosed=await Promise.race([closed,new Promise(resolve=>{closeTimer=setTimeout(()=>resolve(false),3000);})]);clearTimeout(closeTimer);
+  if(!proxyClosed&&!failure)failure={message:'owned HTTPS fixture did not close',stack:null};
   await log.close();
   await fs.writeFile(path.join(evidence,'vaultwarden-e2e-results.json'),JSON.stringify({checks,passed:checks.length,failure,
     synthetic_only:true,real_server:true,official_cli:'2025.12.1',server_release:'1.37.4',
-    entry_id:entryId,attachment_id:attachmentId,agent_exit:child?.exitCode,agent_signal:child?.signalCode,cleanup:true,
+    entry_id:entryId,attachment_id:attachmentId,agent_exit:child?.exitCode,agent_signal:child?.signalCode,cleanup:proxyClosed&&(!child||child.exitCode!==null||child.signalCode!==null),
     tls:'Ephemeral local CA, hostname-valid server certificate, Node extra CA and Rust native roots; certificate verification enabled'},null,2));
 }
 if(failure)process.exitCode=1;

@@ -2,6 +2,7 @@
 import hashlib
 import json
 import os
+import signal
 from pathlib import Path
 import subprocess
 import sys
@@ -9,7 +10,7 @@ import time
 import zipfile
 import urllib.request
 
-SOURCE_SHA = "aefe9fc2802f3cc11e269da07bb9e38c0cd2d372"
+SOURCE_SHA = "e12ee6364b82a5be960a626514add36e55cd0704"
 BASE_SHA = "77464d414a9e41165d5b15f049bee1f0c0f2a982"
 source, evidence, baseline = (Path(arg).resolve() for arg in sys.argv[1:])
 proof = Path(__file__).resolve().parent
@@ -42,9 +43,14 @@ def run(name, args, timeout=1200, cwd=None, expected=0):
     command_env["CARGO_TARGET_DIR"] = str(baseline_target if cwd == baseline else candidate_target)
     try:
         with log.open("wb") as stream:
-            proc = subprocess.run(args, cwd=cwd or source, env=command_env, stdout=stream, stderr=subprocess.STDOUT, timeout=timeout, check=False)
-        code = proc.returncode
+            proc = subprocess.Popen(args, cwd=cwd or source, env=command_env, stdout=stream, stderr=subprocess.STDOUT, start_new_session=True)
+            code = proc.wait(timeout=timeout)
     except subprocess.TimeoutExpired:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        proc.wait()
         code = 124
     record = {"name": name, "argv": args, "exit": code, "expected_exit": expected, "cargo_target_dir": command_env["CARGO_TARGET_DIR"], "seconds": round(time.monotonic() - start, 3), "log_sha256": hashlib.sha256(log.read_bytes()).hexdigest()}
     results["commands"].append(record)
@@ -64,14 +70,14 @@ results["unchanged_baseline_proof"] = {
     "archive_sha256": "9bfc3eda8ea4f9696694db8447e0369e0d161df41fc46457465a1d2d3c8dd801",
     "reason": "Same frozen original and toolchain already verified; preserve full lint diagnostics, build and CLI negative control without repeating them."
 }
-oracle_only = True
-results["reused_current_source_proof"] = {
-    "source": SOURCE_SHA,
+oracle_only = False
+results["previous_source_proof"] = {
+    "source": "aefe9fc2802f3cc11e269da07bb9e38c0cd2d372",
     "run": 40232535412,
     "artifact": 12613602322,
     "archive_sha256": "9ade0def0918909af60eb1beda710669e3e200a10546aa20ba1251d2a73c546d",
     "verified": "31 tests passed in each feature mode, format/build passed, 24 CLI-agent integration checks passed; complete diagnostic lint same6 original warnings. Strict lint retains original4 lib failures.",
-    "reason": "Application source unchanged; only complete the previously blocked HTTPS real-server oracle."
+    "reason": "Prior proof retained; current atomic cache change receives new full checks and the same real-server oracle."
 }
 binary_root=candidate_target/"debug"
 if not oracle_only:
