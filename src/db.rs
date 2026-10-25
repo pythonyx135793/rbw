@@ -18,6 +18,8 @@ pub struct Entry {
     pub notes: Option<String>,
     pub history: Vec<HistoryEntry>,
     pub key: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachments: Vec<crate::attachment::Attachment>,
     pub master_password_reprompt: crate::api::CipherRepromptType,
 }
 

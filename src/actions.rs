@@ -168,6 +168,40 @@ async fn sync_once(
     client.sync(access_token).await
 }
 
+pub async fn attachment(
+    access_token: &str,
+    refresh_token: &str,
+    entry_id: &str,
+    attachment_id: &str,
+) -> Result<(
+    Option<String>,
+    (crate::db::Entry, crate::attachment::Attachment),
+)> {
+    with_exchange_refresh_token_async(
+        access_token,
+        refresh_token,
+        |access_token| {
+            let access_token = access_token.to_string();
+            let entry_id = entry_id.to_string();
+            let attachment_id = attachment_id.to_string();
+            Box::pin(async move {
+                let (client, _) = api_client_async().await?;
+                client
+                    .attachment(&access_token, &entry_id, &attachment_id)
+                    .await
+            })
+        },
+    )
+    .await
+}
+
+pub async fn attachment_bytes(
+    attachment: &crate::attachment::Attachment,
+) -> Result<Vec<u8>> {
+    let (client, _) = api_client_async().await?;
+    client.attachment_bytes(attachment).await
+}
+
 pub fn add(
     access_token: &str,
     refresh_token: &str,

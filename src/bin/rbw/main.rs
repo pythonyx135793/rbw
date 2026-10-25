@@ -84,6 +84,15 @@ enum Opt {
         clipboard: bool,
         #[structopt(short, long, help = "List fields in this entry")]
         list_fields: bool,
+        #[arg(long, help = "Download an attachment by exact filename or ID", requires = "output", conflicts_with_all = ["field", "full", "raw", "list_fields"])]
+        #[cfg_attr(feature = "clipboard", arg(conflicts_with = "clipboard"))]
+        attachment: Option<String>,
+        #[arg(
+            long,
+            help = "Attachment output file, or - for binary stdout",
+            requires = "attachment"
+        )]
+        output: Option<std::path::PathBuf>,
     },
 
     #[command(about = "Search for entries")]
@@ -307,6 +316,67 @@ impl Config {
     }
 }
 
+#[cfg(test)]
+mod attachment_args_tests {
+    use super::*;
+
+    #[test]
+    fn attachment_arguments_require_output_and_reject_other_formats() {
+        Opt::command().debug_assert();
+        for option in ["--raw", "--full", "--list-fields"] {
+            assert!(Opt::try_parse_from([
+                "rbw",
+                "get",
+                "entry",
+                "--attachment",
+                "file",
+                "--output",
+                "out",
+                option
+            ])
+            .is_err());
+        }
+        assert!(Opt::try_parse_from([
+            "rbw",
+            "get",
+            "entry",
+            "--attachment",
+            "file"
+        ])
+        .is_err());
+        assert!(Opt::try_parse_from([
+            "rbw", "get", "entry", "--output", "out"
+        ])
+        .is_err());
+        assert!(Opt::try_parse_from([
+            "rbw",
+            "get",
+            "entry",
+            "user",
+            "--folder",
+            "folder",
+            "--ignorecase",
+            "--attachment",
+            "file",
+            "--output",
+            "-"
+        ])
+        .is_ok());
+        #[cfg(feature = "clipboard")]
+        assert!(Opt::try_parse_from([
+            "rbw",
+            "get",
+            "entry",
+            "--attachment",
+            "file",
+            "--output",
+            "out",
+            "--clipboard"
+        ])
+        .is_err());
+    }
+}
+
 fn main() {
     let opt = Opt::parse();
 
@@ -346,6 +416,8 @@ fn main() {
             #[cfg(feature = "clipboard")]
             clipboard,
             list_fields,
+            attachment,
+            output,
         } => commands::get(
             find_args.needle.clone(),
             find_args.user.as_deref(),
@@ -359,6 +431,8 @@ fn main() {
             false,
             find_args.ignorecase,
             list_fields,
+            attachment.as_deref(),
+            output.as_deref(),
         ),
         Opt::Search {
             term,
