@@ -28,18 +28,25 @@ with zipfile.ZipFile(evidence / "tested-source.zip", "w", zipfile.ZIP_DEFLATED) 
     for path in paths:
         archive.write(source / path, path)
 results = {"source_commit": SOURCE_SHA, "source_tree": git("rev-parse", "HEAD^{tree}"), "source_sha256": manifest, "commands": []}
+target_root = Path(os.environ["CARGO_TARGET_DIR"]).resolve()
+baseline_target = target_root / "baseline"
+candidate_target = target_root / "candidate"
+assert baseline_target != candidate_target
+results["isolated_target_directories"] = {"baseline": str(baseline_target), "candidate": str(candidate_target)}
 
 
 def run(name, args, timeout=1200, cwd=None, expected=0):
     start = time.monotonic()
     log = evidence / (name + ".log")
+    command_env = os.environ.copy()
+    command_env["CARGO_TARGET_DIR"] = str(baseline_target if cwd == baseline else candidate_target)
     try:
         with log.open("wb") as stream:
-            proc = subprocess.run(args, cwd=cwd or source, stdout=stream, stderr=subprocess.STDOUT, timeout=timeout, check=False)
+            proc = subprocess.run(args, cwd=cwd or source, env=command_env, stdout=stream, stderr=subprocess.STDOUT, timeout=timeout, check=False)
         code = proc.returncode
     except subprocess.TimeoutExpired:
         code = 124
-    record = {"name": name, "argv": args, "exit": code, "expected_exit": expected, "seconds": round(time.monotonic() - start, 3), "log_sha256": hashlib.sha256(log.read_bytes()).hexdigest()}
+    record = {"name": name, "argv": args, "exit": code, "expected_exit": expected, "cargo_target_dir": command_env["CARGO_TARGET_DIR"], "seconds": round(time.monotonic() - start, 3), "log_sha256": hashlib.sha256(log.read_bytes()).hexdigest()}
     results["commands"].append(record)
     (evidence / "results.json").write_text(json.dumps(results, indent=2) + "\n")
     print(json.dumps(record), flush=True)
@@ -53,9 +60,10 @@ run("rust-version", ["rustc", "+1.99.1", "--version"], 30)
 run("baseline-clippy-strict", ["cargo", "+1.99.1", "clippy", "--locked", "--all-targets", "--all-features", "--", "-Dwarnings"], cwd=baseline, expected=101)
 run("baseline-clippy-diagnostics", ["cargo", "+1.99.1", "clippy", "--locked", "--all-targets", "--all-features", "--message-format=json"], cwd=baseline)
 run("baseline-production-build", ["cargo", "+1.99.1", "build", "--locked", "--all-features"], cwd=baseline)
-binary_root=Path(os.environ["CARGO_TARGET_DIR"])/"debug"
-if (binary_root/"rbw").exists():
-    run("original-negative-control", [str(binary_root/"rbw"), "get", "fictional", "--attachment", "file", "--output", "unused"], expected=2)
+baseline_binary=baseline_target/"debug/rbw"
+binary_root=candidate_target/"debug"
+if baseline_binary.exists():
+    run("original-negative-control", [str(baseline_binary), "get", "fictional", "--attachment", "file", "--output", "unused"], expected=2)
     results["original_negative_control_valid"] = "unexpected argument '--attachment'" in (evidence/"original-negative-control.log").read_text()
     assert results["original_negative_control_valid"]
 run("format", ["cargo", "+1.99.1", "fmt", "--check"], 60)
@@ -96,4 +104,4 @@ results["final_clean_source"] = not git("status", "--porcelain") and all(hashlib
 files = {path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in evidence.iterdir() if path.is_file()}
 (evidence / "artifact-manifest.json").write_text(json.dumps(files, indent=2) + "\n")
 assert results["final_clean_source"], "application sources changed during validation"
-sys.exit(1 if any(command["exit"] for command in results["commands"]) else 0)
+sys.exit(1 if any(command["exit"] != command["expected_exit"] for command in results["commands"]) else 0)
