@@ -52,8 +52,23 @@ fn decrypt_key(
     key: &str,
     keys: &crate::locked::Keys,
 ) -> Result<crate::locked::Keys> {
-    let mut bytes = crate::cipherstring::CipherString::new(key)?
-        .decrypt_symmetric(keys, None)?;
+    // Unlike the legacy text parser, wrapped attachment/item keys must be
+    // authenticated type-2 cipherstrings with correctly sized components.
+    if !key.starts_with("2.") {
+        return Err(Error::InvalidAttachment {
+            reason: "unsupported wrapped encryption key".to_string(),
+        });
+    }
+    let cipher = crate::cipherstring::CipherString::new(key)?;
+    if !matches!(&cipher,
+        crate::cipherstring::CipherString::Symmetric { iv, ciphertext, mac: Some(mac) }
+        if iv.len() == 16 && mac.len() == 32 && !ciphertext.is_empty() && ciphertext.len() % 16 == 0
+    ) {
+        return Err(Error::InvalidAttachment {
+            reason: "malformed or unauthenticated encryption key".to_string(),
+        });
+    }
+    let mut bytes = cipher.decrypt_symmetric(keys, None)?;
     if bytes.len() != 64 {
         bytes.zeroize();
         return Err(Error::InvalidAttachment {
@@ -191,6 +206,10 @@ mod tests {
                 "attachment key length {len}"
             );
         }
+        for wrapped in ["", "\0.", "0.a|b", "2.AA==|AA==|AA==", "2.AA==|AA=="]
+        {
+            assert!(decrypt(&data, &key, None, Some(wrapped)).is_err());
+        }
     }
 
     #[test]
@@ -211,7 +230,7 @@ mod tests {
                 "corruption {index}"
             );
         }
-        let mut trailing = data.clone();
+        let mut trailing = data;
         trailing.push(0);
         assert!(decrypt(&trailing, &key, None, None).is_err());
     }
@@ -235,7 +254,7 @@ mod tests {
             "name":"encrypted", "data":"SecureNote", "fields":[],
             "notes":null, "history":[], "key":null, "master_password_reprompt":0
         })).unwrap();
-        assert!(entry.attachments.is_empty());
+        assert_eq!(entry.attachments, []);
         assert!(serde_json::to_value(entry)
             .unwrap()
             .get("attachments")

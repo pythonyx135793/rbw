@@ -583,6 +583,78 @@ mod attachment_tests {
         );
         task.abort();
     }
+
+    #[tokio::test]
+    async fn dot_identifiers_and_unsafe_urls_are_rejected_without_network() {
+        let client = Client::new("https://api.example.invalid", "", "", None);
+        for id in ["", ".", ".."] {
+            assert!(matches!(
+                client.attachment("token", id, "file").await,
+                Err(Error::InvalidAttachment { .. })
+            ));
+            assert!(matches!(
+                client.attachment("token", "entry", id).await,
+                Err(Error::InvalidAttachment { .. })
+            ));
+        }
+        for url in [
+            "file:///etc/passwd",
+            "http://api.example.invalid/file",
+            "https://user:pass@example.invalid/file",
+        ] {
+            let attachment = crate::attachment::Attachment {
+                id: "file".to_string(),
+                url: url.to_string(),
+                file_name: "encrypted".to_string(),
+                key: None,
+                size: None,
+            };
+            assert!(matches!(
+                client.attachment_bytes(&attachment).await,
+                Err(Error::InvalidAttachment { .. })
+            ));
+        }
+    }
+
+    #[tokio::test]
+    async fn redirected_blob_requests_stay_unauthenticated() {
+        let (url, requests, task) = server("ok").await;
+        let listener =
+            tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let origin = format!("http://{}", listener.local_addr().unwrap());
+        let target = format!("{url}/blob");
+        let app = axum::Router::new().fallback(
+            move |headers: axum::http::HeaderMap| {
+                let target = target.clone();
+                async move {
+                    assert!(!headers.contains_key("Authorization"));
+                    axum::http::Response::builder()
+                        .status(302)
+                        .header("Location", target)
+                        .body(axum::body::Body::empty())
+                        .unwrap()
+                }
+            },
+        );
+        let redirect_task = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        let client = Client::new(&origin, &origin, &origin, None);
+        let attachment = crate::attachment::Attachment {
+            id: "file".to_string(),
+            url: origin,
+            file_name: "encrypted".to_string(),
+            key: None,
+            size: None,
+        };
+        assert_eq!(
+            client.attachment_bytes(&attachment).await.unwrap(),
+            [0, 255]
+        );
+        assert_eq!(requests.lock().unwrap()[0], ("/blob".to_string(), None));
+        redirect_task.abort();
+        task.abort();
+    }
 }
 
 impl SyncResCipher {
